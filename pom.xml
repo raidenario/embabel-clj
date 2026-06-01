@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Casca imperativa mínima: Spring Boot monta o contexto + plugin de run/empacotamento.
+      Spring Boot 3.5.14 = versão contra a qual o Embabel 0.4.0 foi compilado (spring-ai 1.1.5).
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.14</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>embabel-clj</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>embabel-clj</name>
+    <description>Embabel (Nivel 3, data-oriented) a partir de Clojure, sem AOT</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <embabel.version>0.4.0</embabel.version>
+        <clojure.version>1.12.1</clojure.version>
+        <nrepl.version>1.3.1</nrepl.version>
+        <malli.version>0.16.4</malli.version>
+        <clojure-maven-plugin.version>1.9.3</clojure-maven-plugin.version>
+        <!--
+          O spring-boot-starter-parent fixa kotlin.version=1.9.25, mas o Embabel 0.4.0
+          foi compilado com Kotlin 2.1.0 (metadata binaria 2.1.0). O compilador 1.9 nao
+          consegue ler esse metadata -> sobrescrevemos para alinhar com o Embabel.
+          Afeta apenas a compilacao do agente de comparacao em Kotlin (a stdlib 2.1.0 e
+          retrocompativel; Spring/Embabel ja a usam em runtime).
+        -->
+        <kotlin.version>2.1.0</kotlin.version>
+    </properties>
+
+    <repositories>
+        <!-- Obrigatorio: dependencia transitiva do Embabel/Spring AI (mcp) vive em milestones -->
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- nREPL e publicado no Clojars, nao no Maven Central -->
+        <repository>
+            <id>clojars</id>
+            <name>Clojars</name>
+            <url>https://repo.clojars.org/</url>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- BOM do Embabel: resolve versoes de Spring AI/MCP/etc. sozinha -->
+            <dependency>
+                <groupId>com.embabel.agent</groupId>
+                <artifactId>embabel-agent-dependencies</artifactId>
+                <version>${embabel.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Plataforma de agentes: traz o autoconfigure que cria o bean AgentPlatform -->
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-starter</artifactId>
+        </dependency>
+
+        <!--
+          Provider Gemini (Google AI / Developer API, chave simples). Acessa o Gemini
+          pelo endpoint OpenAI-compativel (generativelanguage.googleapis.com/v1beta/openai),
+          entao visao/multimodal funciona via base64. Registra os modelos a partir de um
+          YAML estatico (sem chamada de rede no startup), satisfazendo a validacao do
+          'default LLM'. A chave e lida de GEMINI_API_KEY / embabel.agent.platform.models.gemini.api-key.
+          Usado pelo agente de natureza (analise de imagem); o hello-world nao usa LLM.
+        -->
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-starter-gemini</artifactId>
+        </dependency>
+
+        <!-- Nucleo funcional roda em Clojure, carregado em runtime (sem AOT) -->
+        <dependency>
+            <groupId>org.clojure</groupId>
+            <artifactId>clojure</artifactId>
+            <version>${clojure.version}</version>
+        </dependency>
+
+        <!--
+          Malli: schemas-como-DADO. Usado p/ validar e coagir a saida EDN do LLM
+          (forma dos insights), derivar a lista de campos do prompt do MESMO schema
+          e (bonus) gerar JSON Schema. E o equivalente data-oriented do data class
+          tipado da versao Kotlin, mas o schema e um valor (dado), redefinivel no REPL.
+        -->
+        <dependency>
+            <groupId>metosin</groupId>
+            <artifactId>malli</artifactId>
+            <version>${malli.version}</version>
+        </dependency>
+
+        <!-- nREPL embarcado no processo: o MESMO JVM que hospeda o contexto Spring + agente -->
+        <dependency>
+            <groupId>nrepl</groupId>
+            <artifactId>nrepl</artifactId>
+            <version>${nrepl.version}</version>
+        </dependency>
+
+        <!--
+          Kotlin stdlib: necessaria so para o AGENTE DE COMPARACAO em Kotlin
+          (src/main/kotlin/.../NatureAgent.kt), que mostra o modelo ANOTADO/tipado
+          do Embabel lado a lado com o Nivel 3 em Clojure. A versao e gerenciada
+          pelo spring-boot-starter-parent (kotlin.version=1.9.25); ja vem transitiva
+          via Embabel, declarada aqui so para deixar explicito.
+        -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!--
+          A fonte .clj e empacotada como RESOURCE (vai para o classpath), nunca compilada (sem AOT).
+          E carregada/compilada em memoria por (require ...) em runtime.
+        -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>src/main/clojure</directory>
+            </resource>
+        </resources>
+
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.embabelclj.App</mainClass>
+                </configuration>
+            </plugin>
+
+            <!--
+              clojure-maven-plugin SEM AOT: sem <executions> ligadas a compile.
+              Presente apenas pelos goals clojure:repl / clojure:nrepl para o fluxo de editor.
+            -->
+            <plugin>
+                <groupId>com.theoryinpractise</groupId>
+                <artifactId>clojure-maven-plugin</artifactId>
+                <version>${clojure-maven-plugin.version}</version>
+                <configuration>
+                    <sourceDirectories>
+                        <sourceDirectory>src/main/clojure</sourceDirectory>
+                    </sourceDirectories>
+                    <temporaryOutputDirectory>true</temporaryOutputDirectory>
+                </configuration>
+            </plugin>
+
+            <!--
+              kotlin-maven-plugin: compila APENAS o agente de comparacao em Kotlin
+              (src/main/kotlin). Java (a casca) continua sendo compilado pelo
+              maven-compiler-plugin do parent; os dois nao se referenciam, entao nao
+              precisam de compilacao conjunta. Versao gerenciada pelo parent.
+              O compiler plugin 'spring' (all-open) abre as classes @Component/@Agent
+              para o Spring poder cria-las/proxia-las (classes Kotlin sao final por padrao).
+            -->
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <!--
+                  As execucoes 'compile'/'test-compile' (fonte default: src/main/kotlin)
+                  ja vem do pluginManagement do spring-boot-starter-parent; basta declarar
+                  o plugin. So adicionamos a config: alvo da JVM e o compiler plugin
+                  'spring' (all-open), que abre as classes @Component/@Agent p/ o Spring.
+                -->
+                <configuration>
+                    <jvmTarget>${java.version}</jvmTarget>
+                    <compilerPlugins>
+                        <plugin>spring</plugin>
+                    </compilerPlugins>
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-allopen</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+        </plugins>
+    </build>
+</project>

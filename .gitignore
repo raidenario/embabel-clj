@@ -1,0 +1,21 @@
+# Build output
+/target/
+
+# Clojure
+/.cpcache/
+.nrepl-port
+
+# IntelliJ / IDE
+/.idea/
+*.iml
+
+# Logs
+*.log
+
+# Secrets / env
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
