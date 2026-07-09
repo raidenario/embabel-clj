@@ -10,7 +10,11 @@
   (:import [com.embabel.agent.core Agent]
            [com.embabel.agent.api.common AgentImage]))
 
-(def vision-model "gemini-2.5-flash")
+;; Slug multimodal registrado no models/openai-models.yml (OpenRouter).
+;; Trocado de "gemini-2.5-flash" (slug do starter-gemini) na migracao p/ OpenRouter.
+;; Q8 em aberto (PRD secao 10.3): confirmar que withImage monta image_url/base64
+;; aceito pelo OpenRouter para este slug — validado fora do Slice 0.
+(def vision-model "openai/gpt-4o")
 
 (def fact-insights "nature/insights-ready")
 (def slot-image "image")

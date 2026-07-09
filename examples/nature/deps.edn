@@ -1,0 +1,19 @@
+{;; Exemplo "nature": o agente de análise de fotos de natureza, reescrito
+ ;; sobre a API pública do embabel-clj — ZERO interop no código do usuário.
+ ;;
+ ;; Rodar (da pasta examples/nature, com OPENROUTER_APIKEY no ambiente):
+ ;;   clojure -M:run ../../samples/nature.jpg
+ :paths ["src" "resources"]
+
+ :mvn/repos
+ {"central"           {:url "https://repo1.maven.org/maven2/"}
+  "clojars"           {:url "https://repo.clojars.org/"}
+  "spring-milestones" {:url "https://repo.spring.io/milestone"}}
+
+ :deps
+ {io.github.raidenario/embabel-clj {:local/root "../.."}
+  ;; provider LLM OpenAI-compatível (OpenRouter) — a lib não fixa provider
+  com.embabel.agent/embabel-agent-starter-openai {:mvn/version "0.4.0"}}
+
+ :aliases
+ {:run {:main-opts ["-m" "nature.main"]}}}

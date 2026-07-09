@@ -17,11 +17,14 @@ public class App {
 
     @Bean
     CommandLineRunner registerClojureAgent(AgentPlatform platform) {
+        // Caminho servlet (revisao I1): apenas deploya os agentes e RETORNA.
+        // O Tomcat (web-application-type=servlet) segura a JVM viva; nada de
+        // keep-alive!/interactive!/System.exit no runner.
         return args -> {
             IFn require = Clojure.var("clojure.core", "require");
             require.invoke(Clojure.read("embabel-clj.register"));
-            IFn boot = Clojure.var("embabel-clj.register", "boot");
-            boot.invoke(platform, java.util.Arrays.asList(args));
+            IFn start = Clojure.var("embabel-clj.register", "start!");
+            start.invoke(platform);
         };
     }
 }

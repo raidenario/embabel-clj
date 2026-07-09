@@ -1,0 +1,41 @@
+# ============================================
+# openai-models.yml  (OVERRIDE do default do starter-openai)
+# ============================================
+# Este arquivo vive em src/main/resources e, no fat jar, fica em
+# BOOT-INF/classes/models/openai-models.yml — que o classpath resolve ANTES de
+# BOOT-INF/lib/embabel-agent-openai-autoconfigure-*.jar!/models/openai-models.yml.
+# Logo o OpenAiModelLoader (classpath:models/openai-models.yml via
+# DefaultResourceLoader = primeiro match) carrega ESTES slugs OpenRouter no
+# lugar dos slugs OpenAI do default.
+#
+# 'name' == o identificador que withLlm "<slug>" / embabel.models.default-llm
+# referenciam (resolucao byName). Aqui name == model_id == slug do OpenRouter.
+# Shape replicado do default verificado (OpenAiModelDefinition):
+#   name, model_id, display_name, max_tokens, temperature, pricing_model{...}
+models:
+  - name: "anthropic/claude-3.7-sonnet"
+    model_id: "anthropic/claude-3.7-sonnet"
+    display_name: "Claude 3.7 Sonnet (OpenRouter)"
+    max_tokens: 16384
+    temperature: 0.7
+    pricing_model:
+      usd_per1m_input_tokens: 3.0
+      usd_per1m_output_tokens: 15.0
+
+  - name: "openai/gpt-4o-mini"
+    model_id: "openai/gpt-4o-mini"
+    display_name: "GPT-4o mini (OpenRouter)"
+    max_tokens: 16384
+    temperature: 0.7
+    pricing_model:
+      usd_per1m_input_tokens: 0.15
+      usd_per1m_output_tokens: 0.60
+
+  - name: "openai/gpt-4o"
+    model_id: "openai/gpt-4o"
+    display_name: "GPT-4o (OpenRouter)"
+    max_tokens: 16384
+    temperature: 0.7
+    pricing_model:
+      usd_per1m_input_tokens: 2.5
+      usd_per1m_output_tokens: 10.0

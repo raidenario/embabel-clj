@@ -1,9 +1,15 @@
 # Build output
 /target/
+examples/**/target/
 
 # Clojure
 /.cpcache/
+examples/**/.cpcache/
 .nrepl-port
+
+# Tooling caches
+/.clj-kondo/.cache/
+/.lsp/
 
 # IntelliJ / IDE
 /.idea/
