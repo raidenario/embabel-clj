@@ -103,17 +103,39 @@
     (reify kotlin.jvm.functions.Function1
       (invoke [_ world-state] (Double/valueOf (double (f world-state)))))))
 
+(def ^:private qos-ctor
+  ;; O ctor do ActionQos MUDOU entre versões (verificado por reflexão nos jars
+  ;; + fonte ActionQos.kt no GitHub, 10/jul/2026):
+  ;;   0.4.0 → (int, long, double, long, boolean)
+  ;;   0.5.0 → (int, long, double, long, String, boolean)
+  ;; O String novo é propertyPrefix (default ""): namespace p/ configurar QoS
+  ;; por action via properties do Spring (ActionQosPropertyProvider).
+  ;; Resolvido UMA vez por reflexão — a lib funciona nas duas versões.
+  (delay
+    (or (try (.getConstructor ActionQos
+                              (into-array Class [Integer/TYPE Long/TYPE Double/TYPE
+                                                 Long/TYPE String Boolean/TYPE]))
+             (catch NoSuchMethodException _ nil))
+        (.getConstructor ActionQos
+                         (into-array Class [Integer/TYPE Long/TYPE Double/TYPE
+                                            Long/TYPE Boolean/TYPE])))))
+
 (defn qos
   "ActionQos a partir de mapa. Default da BIBLIOTECA = FAIL-FAST (1 tentativa,
    lição do fabulista: o default do framework, 5 tentativas com backoff
    10s→60s, transforma um bug no corpo em minutos de agonia). CUIDADO: o 1º
-   arg do ActionQos é maxAttempts, NÃO retries — 0 = zero execuções."
+   arg do ActionQos é maxAttempts, NÃO retries — 0 = zero execuções.
+   `:property-prefix` (só 0.5.0+): namespace p/ QoS via Spring properties."
   ^ActionQos [m]
-  (ActionQos. (int    (:max-attempts m 1))
+  (let [^java.lang.reflect.Constructor c @qos-ctor
+        base [(int    (:max-attempts m 1))
               (long   (:backoff-millis m 5000))
               (double (:backoff-multiplier m 2.0))
-              (long   (:backoff-max-millis m 20000))
-              (boolean (:idempotent? m false))))
+              (long   (:backoff-max-millis m 20000))]
+        args (if (= 6 (.getParameterCount c))
+               (conj base (str (:property-prefix m "")) (boolean (:idempotent? m false)))
+               (conj base (boolean (:idempotent? m false))))]
+    (.newInstance c (object-array args))))
 
 (defn- cond-names ^java.util.List [ks]
   (mapv bb/key->str ks))

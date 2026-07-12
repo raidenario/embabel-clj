@@ -16,7 +16,10 @@
   ;; Obrigatório: dependências transitivas do Embabel/Spring AI (mcp-bom)
   ;; vivem em milestones. Consumidores precisam repetir este repo no próprio
   ;; deps.edn (tools.deps NÃO herda :mvn/repos de dependências).
-  "spring-milestones" {:url "https://repo.spring.io/milestone"}}
+  "spring-milestones" {:url "https://repo.spring.io/milestone"}
+  ;; Só usados pelo alias :probe-050 (sonda contra o 0.5.0-SNAPSHOT):
+  "embabel-releases"  {:url "https://repo.embabel.com/artifactory/libs-release"}
+  "embabel-snapshots" {:url "https://repo.embabel.com/artifactory/libs-snapshot"}}
 
  :deps
  {org.clojure/clojure                     {:mvn/version "1.12.1"}
@@ -44,4 +47,10 @@
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :main-opts   ["-m" "cognitect.test-runner"]
-         :exec-fn     cognitect.test-runner.api/test}}}
+         :exec-fn     cognitect.test-runner.api/test}
+
+  ;; Sonda do roadmap "verificar contra 0.5.x (Darwin)": roda a suíte com o
+  ;; embabel-agent trocado para a versão que o DICE exige.
+  ;;   clojure -M:probe-050:test
+  :probe-050 {:override-deps {com.embabel.agent/embabel-agent-starter
+                              {:mvn/version "0.5.0-SNAPSHOT"}}}}}
