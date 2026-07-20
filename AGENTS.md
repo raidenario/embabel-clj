@@ -44,8 +44,10 @@ samples/                                 ; imagens das demos
 ```
 
 - `interop.clj` = TODO proxy/reify (o "imposto pago uma vez"). Assinaturas
-  VERIFICADAS por javap contra embabel-agent-api 0.4.0 — não chutar interop
-  nova: javap primeiro (jars em `~/.m2/repository/com/embabel/`).
+  VERIFICADAS por javap/reflexão contra embabel-agent-api 0.4.0 E 1.0.0 GA —
+  não chutar interop nova: javap primeiro (jars em
+  `~/.m2/repository/com/embabel/`). API que muda entre versões é resolvida
+  por reflexão uma vez (qos-ctor; llm-by-name no schema.clj).
 - `core.clj` = fachada pública (action/goal/condition/agent/agent-from-ns/
   deploy!/run!/result/process-options). `condition` = **ComputedBooleanCondition**
   (classe do próprio framework; ctor `(String, double, Function2<OperationContext,

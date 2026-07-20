@@ -142,13 +142,25 @@
 (defn- name-str ^String [k]
   (if (keyword? k) (name k) (str k)))
 
+(def ^:private llm-by-name
+  ;; O método do companion que cria LlmOptions por slug MUDOU de nome:
+  ;;   0.4.0/0.5.0 → fromModel(String)   1.0.0 → withModel(String)
+  ;; Resolvido UMA vez por reflexão — a lib funciona nas duas famílias
+  ;; (mesmo padrão do qos-ctor em interop.clj).
+  (delay
+    (let [c (class com.embabel.common.ai.model.LlmOptions/Companion)]
+      (or (try (.getMethod c "withModel" (into-array Class [String]))
+               (catch NoSuchMethodException _ nil))
+          (.getMethod c "fromModel" (into-array Class [String]))))))
+
 (defn- llm-options
   "LlmOptions do Embabel a partir de :llm/:max-tokens/:temperature/:timeout-s.
    Só é construído quando algum ajuste além do slug é pedido."
   [{:keys [llm max-tokens temperature timeout-s]}]
   (let [companion com.embabel.common.ai.model.LlmOptions/Companion
         base      (if llm
-                    (.fromModel companion llm)
+                    (.invoke ^java.lang.reflect.Method @llm-by-name companion
+                             (object-array [llm]))
                     (.withDefaultLlm companion))]
     (cond-> base
       max-tokens  (.withMaxTokens (int max-tokens))

@@ -38,9 +38,11 @@ class is an empty `gen-class` carrying the annotation as metadata, compiled on
 demand at runtime and defined straight into Clojure's DynamicClassLoader. No
 `src-java`, no `javac`, no prep step.
 
-Status: **experimental**, verified against `embabel-agent 0.4.0` / Spring Boot
-3.5 / JDK 21 / Clojure 1.12. Extracted from two real Embabel-from-Clojure
-projects (a calendar-mirror reconciler and a corporate e-mail hunter).
+Status: **experimental**, verified against `embabel-agent 1.0.0` (GA, on Maven
+Central) / Spring Boot 3.5 / JDK 21 / Clojure 1.12 — with adaptive interop
+keeping 0.4.0 and 0.5.x working (`:probe-040` / `:probe-050` run the suite
+against them). Extracted from two real Embabel-from-Clojure projects (a
+calendar-mirror reconciler and a corporate e-mail hunter).
 
 ## Why Clojure for Embabel agents?
 
@@ -67,7 +69,8 @@ projects (a calendar-mirror reconciler and a corporate e-mail hunter).
         {:git/url "https://github.com/raidenario/embabel-clj"
          :git/sha "..."}                       ; or {:local/root "..."}
         ;; pick an LLM provider starter (the lib doesn't force one):
-        com.embabel.agent/embabel-agent-starter-openai {:mvn/version "0.4.0"}}
+        ;; version MUST match the lib's embabel-agent-starter (1.0.0):
+        com.embabel.agent/embabel-agent-starter-openai {:mvn/version "1.0.0"}}
 
  ;; REQUIRED: tools.deps does not inherit repos from dependencies.
  :mvn/repos {"spring-milestones" {:url "https://repo.spring.io/milestone"}
@@ -274,9 +277,11 @@ clojure -T:build install   # local Maven install (pure-source jar)
 
 ## Roadmap
 
-- Verify against Embabel 0.5.x ("Darwin") and re-check the 0.4.0 planner
-  gotchas; expose 0.5 features (guardrails, retry-with-exception-classification,
-  streaming, agent-skills) as data.
+- ~~Verify against Embabel 0.5.x ("Darwin")~~ done — and against 1.0.0 GA
+  (suite + Spring boot + live LLM call; `LlmOptions.fromModel` renamed to
+  `withModel`, resolved reflectively). Next: expose 0.5+/1.0 features
+  (guardrails, retry-with-exception-classification, streaming, agent-skills,
+  RAG APIs promoted in 1.0) as data.
 - Closed/Open execution modes (intent → agent selection / novel composition);
   async `start` + event listeners as fns; `StuckHandler` as a fn.
 - Explicit `domainTypes` registration; `createObject`-style native data

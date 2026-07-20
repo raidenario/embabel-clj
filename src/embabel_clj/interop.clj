@@ -3,17 +3,22 @@
    aqui — este arquivo é o \"imposto de interop pago uma vez\" que o usuário
    da biblioteca nunca precisa escrever.
 
-   Assinaturas verificadas por javap contra embabel-agent-api 0.4.0:
+   Assinaturas verificadas por javap/reflexão contra embabel-agent-api 0.4.0
+   e RE-verificadas contra o 1.0.0 GA (jul/2026 — suíte + boot + LLM vivo):
    - AbstractAction: ctor de 13 args (name, description, pre, post, cost,
      value, inputs, outputs, toolGroups, canRerun, readOnly, clearBlackboard,
      qos); cost/value são kotlin Function1<WorldState, Double>.
    - Goal: ctor de 9 args (name, description, pre, inputs, outputType, value,
-     tags, examples, export); Export tem ctor sem args.
+     tags, examples, export); Export tem ctor sem args. (1.0.0 adiciona um
+     de 11 — o de 9 permanece.)
    - Condition: INTERFACE — evaluate(OperationContext) -> ConditionDetermination,
      getCost() (ConditionMetadata), getName() (Named). Reificável.
    - Agent: ctors de conveniência de 6/7/8 args (…goals, actions[, conditions
-     [, stuckHandler]]).
-   - ActionQos: ctor sem args com defaults do framework."
+     [, stuckHandler]]) — presentes até o 1.0.0.
+   - ActionQos: ctor sem args com defaults do framework; shape muda por
+     versão (ver qos-ctor adaptativo abaixo).
+   Pontos de API que MUDARAM por versão são resolvidos por reflexão uma vez
+   (qos-ctor aqui; llm-by-name em schema.clj: fromModel→withModel no 1.0.0)."
   (:require [embabel-clj.blackboard :as bb])
   (:import [com.embabel.agent.core.support AbstractAction]
            [com.embabel.agent.core ProcessContext ActionStatus ActionStatusCode

@@ -17,14 +17,16 @@
   ;; vivem em milestones. Consumidores precisam repetir este repo no próprio
   ;; deps.edn (tools.deps NÃO herda :mvn/repos de dependências).
   "spring-milestones" {:url "https://repo.spring.io/milestone"}
-  ;; Só usados pelo alias :probe-050 (sonda contra o 0.5.0-SNAPSHOT):
+  ;; A partir do 1.0.0 o embabel-agent publica no Maven Central; estes dois
+  ;; repos ficam só para as sondas de versões antigas (:probe-040/:probe-050).
   "embabel-releases"  {:url "https://repo.embabel.com/artifactory/libs-release"}
   "embabel-snapshots" {:url "https://repo.embabel.com/artifactory/libs-snapshot"}}
 
  :deps
  {org.clojure/clojure                     {:mvn/version "1.12.1"}
   ;; Traz embabel-agent-api + autoconfigure (o bean AgentPlatform).
-  com.embabel.agent/embabel-agent-starter {:mvn/version "0.4.0"}
+  ;; 1.0.0 GA (jul/2026, Maven Central); interop adaptativa mantém 0.4/0.5.
+  com.embabel.agent/embabel-agent-starter {:mvn/version "1.0.0"}
   ;; Schemas-como-dado: valida a própria API da lib E a saída do LLM.
   metosin/malli                           {:mvn/version "0.16.4"}}
 
@@ -33,15 +35,17 @@
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.5"}}
           :ns-default build}
 
-  ;; Provider LLM OpenAI-compatível (OpenRouter/OpenAI). A lib NÃO fixa
+  ;; Provider LLM OpenAI-compatível (OpenRouter/OpenAI/NVIDIA). A lib NÃO fixa
   ;; provider; adicione este alias (ou o starter equivalente) no seu app.
+  ;; ATENÇÃO: a versão TEM que casar com a do embabel-agent-starter — misturar
+  ;; famílias (ex. starter 1.0.0 + openai 0.4.0) dá NoSuchMethodError no boot.
   :openai {:extra-deps {com.embabel.agent/embabel-agent-starter-openai
-                        {:mvn/version "0.4.0"}}}
+                        {:mvn/version "1.0.0"}}}
 
   :dev {:extra-paths ["examples/nature/src" "examples/nature/resources"]
         :extra-deps  {nrepl/nrepl {:mvn/version "1.3.1"}
                       com.embabel.agent/embabel-agent-starter-openai
-                      {:mvn/version "0.4.0"}}}
+                      {:mvn/version "1.0.0"}}}
 
   :test {:extra-paths ["test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
@@ -49,8 +53,15 @@
          :main-opts   ["-m" "cognitect.test-runner"]
          :exec-fn     cognitect.test-runner.api/test}
 
-  ;; Sonda do roadmap "verificar contra 0.5.x (Darwin)": roda a suíte com o
-  ;; embabel-agent trocado para a versão que o DICE exige.
-  ;;   clojure -M:probe-050:test
+  ;; Sondas de compat retro (default da lib é 1.0.0; a interop adaptativa —
+  ;; qos-ctor, llm-by-name — cobre as famílias antigas):
+  ;;   clojure -M:probe-040:test   (0.4.0 Curdimurka)
+  ;;   clojure -M:probe-050:test   (0.5.0 Darwin — a versão que o DICE exige)
+  :probe-040 {:override-deps {com.embabel.agent/embabel-agent-starter
+                              {:mvn/version "0.4.0"}
+                              com.embabel.agent/embabel-agent-starter-openai
+                              {:mvn/version "0.4.0"}}}
   :probe-050 {:override-deps {com.embabel.agent/embabel-agent-starter
+                              {:mvn/version "0.5.0-SNAPSHOT"}
+                              com.embabel.agent/embabel-agent-starter-openai
                               {:mvn/version "0.5.0-SNAPSHOT"}}}}}
