@@ -1,0 +1,23 @@
+{;; Exemplo "process-store": a tese B rodando contra a plataforma REAL.
+ ;;
+ ;; Um agente GOAP de três actions, sem nenhuma chamada de LLM (a chave é
+ ;; dummy — o provider precisa estar no classpath para o contexto subir, mas
+ ;; nada é gasto). O AgentProcessRepository é o EDN da lib; no fim o contexto
+ ;; é fechado (a "morte da JVM") e a história é lida de volta do DISCO.
+ ;;
+ ;; Rodar (da pasta examples/process-store):
+ ;;   clojure -M:run
+ :paths ["src"]
+
+ :mvn/repos
+ {"central"           {:url "https://repo1.maven.org/maven2/"}
+  "clojars"           {:url "https://repo.clojars.org/"}
+  "spring-milestones" {:url "https://repo.spring.io/milestone"}}
+
+ :deps
+ {io.github.raidenario/embabel-clj {:local/root "../.."}
+  ;; a versão TEM que casar com a do embabel-agent-starter da lib (1.0.0)
+  com.embabel.agent/embabel-agent-starter-openai {:mvn/version "1.0.0"}}
+
+ :aliases
+ {:run {:main-opts ["-m" "store.demo"]}}}

@@ -87,10 +87,37 @@
   [src ks]
   (into {} (map (fn [k] [k (condition? src k)])) ks))
 
+(defn hide!
+  "Esconde um objeto do blackboard: ele continua lá (e no log), mas some das
+   leituras e da determinação de world state do planner. É o mecanismo de
+   ESCOPO — ver embabel-clj.states, que o usa para fatiar um fluxo em fases —
+   e a alternativa cirúrgica ao `:clear-blackboard? true`, que zera tudo."
+  [src what]
+  (.hide (->blackboard src) what)
+  what)
+
 (defn objects
   "Todos os objetos do blackboard (a visão \"tipada\" do Embabel)."
   [src]
   (vec (.getObjects (->blackboard src))))
+
+(defn last-of
+  "O ÚLTIMO objeto daquele tipo no blackboard, ou nil. É o lado de leitura da
+   camada tipada: a action declara `:outputs [Produto]`, o goal declara
+   `:inputs [Produto]`, e no fim você lê o objeto sem saber o nome do slot.
+
+     (bb/last-of proc Produto)   ; => #Produto{...}
+
+   `defrecord` é uma Class como qualquer outra, então funciona direto com os
+   seus records."
+  [src ^Class t]
+  (.last (->blackboard src) t))
+
+(defn last-result
+  "O último resultado produzido no blackboard (o `lastResult()` do Embabel),
+   sem precisar dizer o tipo. nil quando não há nenhum."
+  [src]
+  (.lastResult (->blackboard src)))
 
 ;; Aliases curtos, continuidade com os helpers dos projetos agendas /
 ;; beautiful-linkedin (g / s! / c!).

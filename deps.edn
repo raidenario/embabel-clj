@@ -47,9 +47,18 @@
                       com.embabel.agent/embabel-agent-starter-openai
                       {:mvn/version "1.0.0"}}}
 
+  ;; RAG é OPT-IN: embabel-clj.rag importa com.embabel.agent.rag.*, que não vem
+  ;; no starter. A lib não declara isso como dep dura (deps mínimas); quem usa
+  ;; a ns adiciona este módulo ao próprio projeto.
+  :rag {:extra-deps {com.embabel.agent/embabel-agent-rag-pipeline
+                     {:mvn/version "1.0.0"}}}
+
   :test {:extra-paths ["test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
-                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                       ;; para o rag-test; ver o alias :rag acima
+                       com.embabel.agent/embabel-agent-rag-pipeline
+                       {:mvn/version "1.0.0"}}
          :main-opts   ["-m" "cognitect.test-runner"]
          :exec-fn     cognitect.test-runner.api/test}
 

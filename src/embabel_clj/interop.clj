@@ -19,14 +19,87 @@
      versão (ver qos-ctor adaptativo abaixo).
    Pontos de API que MUDARAM por versão são resolvidos por reflexão uma vez
    (qos-ctor aqui; llm-by-name em schema.clj: fromModel→withModel no 1.0.0)."
-  (:require [embabel-clj.blackboard :as bb])
+  (:require [clojure.string :as str]
+            [embabel-clj.blackboard :as bb])
   (:import [com.embabel.agent.core.support AbstractAction]
            [com.embabel.agent.core ProcessContext ActionStatus ActionStatusCode
-            ActionQos Agent Goal Export Condition ComputedBooleanCondition
-            IoBinding ToolGroupRequirement]
+            ActionQos ActionRunner Agent Goal Export Condition
+            ComputedBooleanCondition IoBinding ToolGroupRequirement]
            [com.embabel.agent.api.common TransformationActionContext
             TerminationScope]
-           [java.time Duration]))
+           [java.time Duration]
+           [kotlin Unit]
+           [kotlin.jvm.functions Function0]))
+
+;; ---------------------------------------------------------------------------
+;; Objeto Java -> mapa Clojure (projeção genérica por getters).
+;;
+;; Eventos (AgenticEvent) e contextos de interceptor (BeforeLlmCallContext & cia)
+;; são data classes Kotlin: um getter sem args por `val`. Em vez de listar campo
+;; a campo — o que envelheceria a cada release do Embabel — refletimos os getters
+;; UMA vez por classe e cacheamos. O objeto original segue disponível em `:raw`.
+;; ---------------------------------------------------------------------------
+
+(defn- prop-key
+  "getFooBar/isFooBar -> :foo-bar. Devolve nil para métodos que não são getters."
+  [^String n]
+  (let [base (cond
+               (and (.startsWith n "get") (> (count n) 3)) (subs n 3)
+               (and (.startsWith n "is")  (> (count n) 2)) (subs n 2)
+               :else nil)]
+    (when base
+      (-> base
+          (str/replace #"([a-z0-9])([A-Z])" "$1-$2")
+          str/lower-case
+          keyword))))
+
+(def ^:private getters-cache (atom {}))
+
+(defn- getters
+  "[[kw Method] ...] dos getters públicos sem args de `c` (memoizado por classe)."
+  [^Class c]
+  (or (@getters-cache c)
+      (let [gs (into []
+                     (keep (fn [^java.lang.reflect.Method m]
+                             (when (and (zero? (.getParameterCount m))
+                                        (not= Void/TYPE (.getReturnType m))
+                                        (zero? (bit-and (.getModifiers m)
+                                                        java.lang.reflect.Modifier/STATIC)))
+                               (when-let [k (prop-key (.getName m))]
+                                 [k m]))))
+                     (.getMethods c))]
+        (swap! getters-cache assoc c gs)
+        gs)))
+
+(defn props
+  "Mapa {:prop valor} lido dos getters públicos de `obj`. `skip` é o conjunto
+   de chaves a NÃO ler (default #{:class}) — use para pular propriedades caras
+   ou cíclicas (ex.: :agent-process, que arrasta o processo inteiro).
+   Getter que lança é ignorado: projeção nunca derruba um listener."
+  ([obj] (props obj #{:class}))
+  ([obj skip]
+   (when (some? obj)
+     (persistent!
+      (reduce (fn [acc [k ^java.lang.reflect.Method m]]
+                (if (contains? skip k)
+                  acc
+                  (try (assoc! acc k (.invoke m obj (object-array 0)))
+                       (catch Throwable _ acc))))
+              (transient {})
+              (getters (class obj)))))))
+
+(defn simple-name
+  "Nome simples da classe de `obj` como keyword kebab-case, sem o sufixo
+   `suffix` (ex.: ActionExecutionStartEvent + \"Event\" -> :action-execution-start)."
+  [obj ^String suffix]
+  (let [n (.getSimpleName (class obj))
+        n (if (and (seq suffix) (.endsWith n suffix) (> (count n) (count suffix)))
+            (subs n 0 (- (count n) (count suffix)))
+            n)]
+    (-> n
+        (str/replace #"([a-z0-9])([A-Z])" "$1-$2")
+        str/lower-case
+        keyword)))
 
 ;; ---------------------------------------------------------------------------
 ;; IoBinding — a camada TIPADA do planner ("name:pkg.Type").
@@ -175,13 +248,28 @@
             (boolean clear-blackboard?)
             (qos (or qos-opts
                      (when retries {:max-attempts (inc retries)})))]
+      ;; O corpo roda DENTRO do `ActionRunner.execute` do framework, não à parte.
+      ;; Antes a lib construía `ActionStatus(0ms, SUCCEEDED)` na mão, e isso
+      ;; custava três coisas:
+      ;;   1. WAITING era impossível — o `AwaitableResponseException` do
+      ;;      human-in-the-loop vazava como erro em vez de estacionar o processo
+      ;;      (é o que destrava embabel-clj.hitl);
+      ;;   2. `ReplanRequestedException` e os demais `ToolControlFlowSignal`
+      ;;      dependiam de escapar por acidente, não por contrato;
+      ;;   3. o runningTime de TODA action era 0ms — visível no log do
+      ;;      process-store, onde `:ms` nunca saía de zero.
+      ;; `ActionRunner.Companion` é campo público estático e existe desde o
+      ;; 0.4.0 (javap nos três jars), então não precisa de resolução adaptativa.
       (execute [^ProcessContext pc]
         (let [ctx (cond-> {:pc pc :action this}
                     llm? (assoc :oc (TransformationActionContext.
                                      nil pc this Object Object)))]
-          (f ctx)
-          (when after (after ctx)))
-        (ActionStatus. (Duration/ofMillis 0) ActionStatusCode/SUCCEEDED))
+          (.execute ActionRunner/Companion pc
+                    (reify Function0
+                      (invoke [_]
+                        (f ctx)
+                        (when after (after ctx))
+                        Unit/INSTANCE)))))
       (referencedInputProperties [_variable] #{}))))
 
 (defn make-goal

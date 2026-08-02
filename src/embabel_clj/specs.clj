@@ -10,8 +10,9 @@
             [embabel-clj.blackboard :as bb]
             [malli.core :as m]
             [malli.error :as me])
-  (:import [com.embabel.agent.core Action Goal Condition]
-           [com.embabel.agent.api.common StuckHandler]))
+  (:import [com.embabel.agent.core Action Goal Condition EarlyTerminationPolicy]
+           [com.embabel.agent.api.common StuckHandler]
+           [com.embabel.agent.api.event AgenticEventListener]))
 
 (def ConditionName
   "Nome de condição booleana: string ou keyword, SEM ':' no texto final
@@ -99,6 +100,36 @@
 (defn- instance-of [^Class c] [:fn {:error/message (str "instância de " (.getName c))}
                                (fn [x] (instance? c x))])
 
+(defn- fn-not-map
+  "`ifn?` casa com MAPA também (mapa é IFn). Sem esta guarda, um typo dentro do
+   mapa escaparia pelo ramo da fn num `:or`."
+  [msg]
+  [:and ifn? [:fn {:error/message msg} (complement map?)]])
+
+;; --- terminação (ver embabel-clj.termination) -------------------------------
+
+(def PolicyDef
+  [:map {:closed true}
+   [:name       {:optional true} [:or :string :keyword]]
+   [:terminate? ifn?]])
+
+(def PolicyLike
+  "EarlyTerminationPolicy como dado: mapa, fn de 1 arg (o AgentProcess) ou
+   instância pronta (as embutidas do framework caem aqui)."
+  [:or PolicyDef
+   (fn-not-map "early-termination: fn de 1 arg ou {:terminate? ...}")
+   (instance-of EarlyTerminationPolicy)])
+
+(def StuckHandlerDef
+  [:map {:closed true}
+   [:name   {:optional true} [:or :string :keyword]]
+   [:handle ifn?]])
+
+(def StuckHandlerLike
+  [:or StuckHandlerDef
+   (fn-not-map "stuck-handler: fn de 1 arg ou {:handle ...}")
+   (instance-of StuckHandler)])
+
 (def AgentDef
   [:map {:closed true}
    [:name          [:or :string :keyword]]
@@ -109,7 +140,62 @@
    [:actions       [:sequential [:or ActionDef (instance-of Action)]]]
    [:conditions    {:optional true} [:sequential [:or ConditionDef (instance-of Condition)]]]
    [:after         {:optional true} ifn?]
-   [:stuck-handler {:optional true} (instance-of StuckHandler)]])
+   ;; fn, {:handle ...} ou instância — ver embabel-clj.termination
+   [:stuck-handler {:optional true} StuckHandlerLike]])
+
+(def ListenerHandlers
+  "Mapa de canais de um AgenticEventListener (ver embabel-clj.events)."
+  [:map {:closed true}
+   [:on-process  {:optional true} ifn?]
+   [:on-platform {:optional true} ifn?]])
+
+(def ListenerLike
+  "Listener como dado: mapa de canais, fn (recebe TODO evento) ou instância.
+   O mapa vem PRIMEIRO no :or — um mapa também satisfaz `ifn?`, então sem a
+   guarda `(not map?)` um typo em `:on-proces` escaparia pelo ramo da fn."
+  [:or
+   ListenerHandlers
+   (fn-not-map "listener: fn de 1 arg ou {:on-process/:on-platform}")
+   (instance-of AgenticEventListener)])
+
+;; --- guardrails (ver embabel-clj.guardrails) --------------------------------
+
+(def GuardRailDef
+  "Guarda como dado. `:on` só é lido pelo `guardrails/guardrail` (a forma 100%
+   EDN); `user-input`/`assistant-message` já sabem qual são."
+  [:and
+   [:map {:closed true}
+    [:name        [:or :string :keyword]]
+    [:description {:optional true} :string]
+    [:fn          {:optional true} ifn?]
+    ;; schema malli como guarda: o explain/humanize vira a lista de erros
+    [:schema      {:optional true} some?]
+    ;; severidade default dos erros desta guarda; só :critical BLOQUEIA
+    [:severity    {:optional true} [:enum :info :warning :error :critical]]
+    ;; só faz sentido em assistant-message (respostas com thinking)
+    [:thinking-fn {:optional true} ifn?]
+    [:on          {:optional true} [:enum :user-input :assistant-message]]]
+   [:fn {:error/message "guardrail precisa de :fn e/ou :schema"}
+    (fn [g] (boolean (or (:fn g) (:schema g))))]])
+
+;; --- interceptors do tool loop (ver embabel-clj.interceptors) ---------------
+;; :closed em todos: `:after-tool-results` (plural por engano) é exatamente o
+;; tipo de typo que viraria silêncio — o hook nunca dispararia e o laço
+;; pareceria não ter interceptor nenhum.
+
+(def ToolLoopInspectorDef
+  [:map {:closed true}
+   [:before-llm-call   {:optional true} ifn?]
+   [:after-llm-call    {:optional true} ifn?]
+   [:after-tool-result {:optional true} ifn?]
+   [:after-iteration   {:optional true} ifn?]])
+
+(def ToolLoopTransformerDef ToolLoopInspectorDef)
+
+(def ToolCallInspectorDef
+  [:map {:closed true}
+   [:before-tool-call {:optional true} ifn?]
+   [:after-tool-call  {:optional true} ifn?]])
 
 (def RunOptions
   [:map {:closed true}
@@ -122,7 +208,14 @@
                                   [:responses?  {:optional true} :boolean]
                                   [:planning?   {:optional true} :boolean]
                                   [:long-plans? {:optional true} :boolean]]]
-   [:planner    {:optional true} [:enum :goap :utility :supervisor]]
+   ;; :hybrid exige embabel-agent 0.5.0+ (o 0.4.0 não tem o valor no enum);
+   ;; a checagem por VERSÃO é do core/process-options, aqui é só o vocabulário.
+   [:planner    {:optional true} [:enum :goap :utility :hybrid :supervisor]]
+   [:listeners  {:optional true} [:sequential ListenerLike]]
+   ;; policies SOMADAS às do :budget (o budget já é três delas), não substituem
+   [:early-termination {:optional true} [:sequential PolicyLike]]
+   ;; contexto visível a TODA tool do processo (auth, correlation-id, tenant)
+   [:tool-call-context {:optional true} [:map-of [:or :string :keyword] :any]]
    [:ephemeral? {:optional true} :boolean]
    [:prune?     {:optional true} :boolean]])
 

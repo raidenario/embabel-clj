@@ -34,7 +34,8 @@
            [java.util.concurrent CountDownLatch]
            [org.springframework.boot WebApplicationType]
            [org.springframework.boot.builder SpringApplicationBuilder]
-           [org.springframework.context ConfigurableApplicationContext]))
+           [org.springframework.context ApplicationContextInitializer
+            ConfigurableApplicationContext]))
 
 (defonce ^:private default-system (atom nil))
 (defonce ^:private keep-alive-latch (atom nil))
@@ -80,6 +81,36 @@
    :servlet WebApplicationType/SERVLET
    :reactive WebApplicationType/REACTIVE})
 
+;; ---------------------------------------------------------------------------
+;; O seam de beans: um objeto Clojure vira bean do Spring SEM @Configuration
+;;
+;; O `:sources` do Spring Boot exige uma CLASSE anotada — e a lib se recusa a
+;; ter casca Java. O ApplicationContextInitializer é a porta dos fundos legítima:
+;; ele roda ANTES do refresh, com acesso ao BeanFactory, e `registerSingleton`
+;; aceita um objeto pronto. Como o Embabel resolve LlmService, EmbeddingService,
+;; OptionsConverter e AgenticEventListener por TIPO no contexto, um `reify` da
+;; interface registrado aqui é indistinguível de um @Bean.
+;; ---------------------------------------------------------------------------
+
+(defn- singleton-initializer
+  "ApplicationContextInitializer que registra `beans` ({nome objeto}) como
+   singletons já prontos, antes do refresh."
+  ^ApplicationContextInitializer [beans]
+  (reify ApplicationContextInitializer
+    (initialize [_ ctx]
+      (let [bf (.getBeanFactory ^ConfigurableApplicationContext ctx)]
+        (doseq [[k v] beans]
+          (.registerSingleton bf (prop-key k) v))))))
+
+(defn- ->initializer
+  "fn de 1 arg (recebe o ConfigurableApplicationContext) ou um
+   ApplicationContextInitializer pronto."
+  ^ApplicationContextInitializer [x]
+  (if (instance? ApplicationContextInitializer x)
+    x
+    (reify ApplicationContextInitializer
+      (initialize [_ ctx] (x ctx) nil))))
+
 (defn start!
   "Sobe o contexto Spring + AgentPlatform. Devolve o sistema
    {:context ConfigurableApplicationContext :platform AgentPlatform}
@@ -91,9 +122,19 @@
    :web         :none (default) | :servlet | :reactive
    :banner?     mostra o banner do Spring (default false)
    :sources     Classes @Configuration/@Component adicionais suas
-   :args        args de linha de comando repassados ao Spring"
+   :beans       {nome objeto} registrados como singletons ANTES do refresh —
+                é como você pluga um LlmService/EmbeddingService/
+                OptionsConverter/AgenticEventListener seu (um `reify` da
+                interface) sem escrever uma classe @Configuration
+   :initializers  seq de fns (recebem o ConfigurableApplicationContext) ou de
+                ApplicationContextInitializer prontos, para o que `:beans` não
+                cobre (property sources, profiles, listeners do contexto)
+   :args        args de linha de comando repassados ao Spring
+
+   Ordem: os `:beans` são registrados primeiro, depois os `:initializers` —
+   assim um initializer seu pode sobrescrever ou ler o que a lib registrou."
   ([] (start! {}))
-  ([{:keys [properties web banner? sources args]
+  ([{:keys [properties web banner? sources beans initializers args]
      :or   {web :none banner? false}}]
    ;; TCCL -> classloader do Clojure ANTES do run (lição do fabulista): a boot
    ;; class vive no DynamicClassLoader, e threads de pool do Spring herdam o
@@ -104,8 +145,13 @@
                      true          (into (map (fn [[k v]] [(prop-key k) (str v)])
                                               (or properties {}))))
          classes   (into-array Class (cons (boot-class) (or sources [])))
-         builder   (doto (SpringApplicationBuilder. classes)
-                     (.web ^WebApplicationType (web-types web)))
+         inits     (cond-> []
+                     (seq beans)        (conj (singleton-initializer beans))
+                     (seq initializers) (into (map ->initializer initializers)))
+         builder   (cond-> (doto (SpringApplicationBuilder. classes)
+                             (.web ^WebApplicationType (web-types web)))
+                     (seq inits)
+                     (.initializers (into-array ApplicationContextInitializer inits)))
          ;; Propriedades do usuário entram como ARGS (--k=v): precedência
          ;; MÁXIMA no Environment. builder.properties() seria defaultProperties
          ;; (precedência mínima) e perderia para defaults embutidos do

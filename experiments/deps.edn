@@ -1,0 +1,37 @@
+{;; Bench for the agent-as-data experiments.
+ ;; Protocol: Obsidian Vault\embabel clj\Experimentos - Provar Agent-as-Data.md
+ ;;
+ ;; Everything runs OFFLINE: no LLM key, no Docker, no Neo4j. The OpenAI
+ ;; provider is on the classpath only because the Embabel context will not boot
+ ;; without one (the key is a dummy and no call is ever made).
+ ;;
+ ;;   clojure -M:e2            E2 · the ceiling of 1000, measured
+ ;;   clojure -M:e1-crash      E1 · runs and KILLS the JVM inside action 3
+ ;;   clojure -M:e1-resume     E1 · rehydrates from the log and finishes
+ ;;   clojure -M:e3-export     E3 · writes the agent as pure EDN
+ ;;   clojure -M:e3-import     E3 · loads the EDN in another JVM and runs it
+ ;;   clojure -M:e4            E4 · replay/memoization vs GOAP replanning
+ ;;   clojure -M:e5            E5 · log + events -> evaluation dataset
+ ;;
+ ;; All at once: ./run-all.sh (E1 NEEDS two processes — phase 1 calls
+ ;; System/exit, so it cannot be chained inside a single JVM).
+ ;; E6/E7 live in fritas/dice-chronicle/experiments (they need Datalevin).
+ :paths ["src"]
+
+ :mvn/repos
+ {"central"           {:url "https://repo1.maven.org/maven2/"}
+  "clojars"           {:url "https://repo.clojars.org/"}
+  "spring-milestones" {:url "https://repo.spring.io/milestone"}}
+
+ :deps
+ {io.github.raidenario/embabel-clj {:local/root ".."}
+  com.embabel.agent/embabel-agent-starter-openai {:mvn/version "1.0.0"}}
+
+ :aliases
+ {:e1-crash  {:main-opts ["-m" "exp.e1" "crash"]}
+  :e1-resume {:main-opts ["-m" "exp.e1" "resume"]}
+  :e2        {:main-opts ["-m" "exp.e2"]}
+  :e3-export {:main-opts ["-m" "exp.e3" "export"]}
+  :e3-import {:main-opts ["-m" "exp.e3" "import"]}
+  :e4        {:main-opts ["-m" "exp.e4"]}
+  :e5        {:main-opts ["-m" "exp.e5"]}}}

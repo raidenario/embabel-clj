@@ -1,15 +1,14 @@
-# Build output
-/target/
-examples/**/target/
+# Build output — unanchored, so nested projects (examples/, experiments/) are covered too
+target/
 
 # Clojure
-/.cpcache/
-examples/**/.cpcache/
+.cpcache/
 .nrepl-port
 
-# Tooling caches
-/.clj-kondo/.cache/
-/.lsp/
+# Tooling caches — `**/` is required: a pattern with an inner slash is anchored to root
+**/.clj-kondo/.cache/
+.lsp/
+.calva/
 
 # IntelliJ / IDE
 /.idea/

@@ -25,10 +25,19 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [embabel-clj.guardrails :as gr]
+            [embabel-clj.interceptors :as ic]
             [malli.core :as m]
             [malli.error :as me]
             [malli.json-schema :as mjs]
-            [malli.transform :as mt]))
+            [malli.transform :as mt])
+  (:import [com.embabel.agent.api.tool.callback
+            ToolCallInspector ToolLoopInspector ToolLoopTransformer]
+           [com.embabel.agent.api.validation.guardrails GuardRail]
+           [com.embabel.common.ai.model Thinking]
+           [com.embabel.common.ai.prompt PromptContributor]
+           [com.embabel.agent.api.common.streaming StreamingPromptRunner]
+           [kotlin.jvm.functions Function0]))
 
 (def ^:dynamic *max-response-chars*
   "Cap de tamanho da resposta parseada (EDN fundo demais estoura a pilha do
@@ -153,10 +162,40 @@
                (catch NoSuchMethodException _ nil))
           (.getMethod c "fromModel" (into-array Class [String]))))))
 
+(defn ->prompt-contributor
+  "PromptContributor a partir de dado. Aceita:
+     - string            -> contribuição fixa
+     - fn de ZERO args   -> contribuição recalculada a cada chamada
+     - PromptContributor -> passa direto
+
+   Não precisa de `reify` da interface: o framework já expõe as fábricas
+   `PromptContributor/fixed` e `/dynamic`, e a segunda recebe um
+   `Function0<String>` do Kotlin — que em Clojure é um reify de um método só.
+   (Os outros dois membros, `role` e `promptContributionLocation`, são DEFAULT
+   na interface `PromptElement`, então não há o que implementar.)"
+  ^PromptContributor [x]
+  (cond
+    (instance? PromptContributor x) x
+    (string? x) (PromptContributor/fixed x)
+    (ifn? x)    (PromptContributor/dynamic (reify Function0 (invoke [_] (str (x)))))
+    :else (throw (ex-info "embabel-clj: prompt-contributor deve ser string, fn de 0 args ou PromptContributor"
+                          {:value x :type (type x)}))))
+
+(defn- ->thinking
+  "Thinking a partir de dado: `:extraction`, um inteiro (orçamento de tokens),
+   ou um `Thinking` pronto."
+  ^Thinking [x]
+  (cond
+    (instance? Thinking x) x
+    (= :extraction x)      (Thinking/withExtraction)
+    (integer? x)           (Thinking/withTokenBudget (int x))
+    :else (throw (ex-info "embabel-clj: :thinking deve ser :extraction, um inteiro ou um Thinking"
+                          {:value x}))))
+
 (defn- llm-options
-  "LlmOptions do Embabel a partir de :llm/:max-tokens/:temperature/:timeout-s.
-   Só é construído quando algum ajuste além do slug é pedido."
-  [{:keys [llm max-tokens temperature timeout-s]}]
+  "LlmOptions do Embabel a partir de :llm/:max-tokens/:temperature/:timeout-s/
+   :thinking. Só é construído quando algum ajuste além do slug é pedido."
+  [{:keys [llm max-tokens temperature timeout-s thinking]}]
   (let [companion com.embabel.common.ai.model.LlmOptions/Companion
         base      (if llm
                     (.invoke ^java.lang.reflect.Method @llm-by-name companion
@@ -165,7 +204,8 @@
     (cond-> base
       max-tokens  (.withMaxTokens (int max-tokens))
       temperature (.withTemperature (Double/valueOf (double temperature)))
-      timeout-s   (.withTimeout (java.time.Duration/ofSeconds (long timeout-s))))))
+      timeout-s   (.withTimeout (java.time.Duration/ofSeconds (long timeout-s)))
+      thinking    (.withThinking (->thinking thinking)))))
 
 (defn ask
   "Texto livre do LLM, a partir do ctx de uma action `{:llm? true}`.
@@ -176,22 +216,99 @@
    :temperature, :timeout-s (timeout por chamada, em segundos — evita a
    tempestade de retries quando um modelo trava/enfileira), :tools (seq de
    embabel-clj.tools/tool — o modelo pode chamá-las), :tool-groups (roles de
-   ToolGroups da plataforma, ex. [\"web\"] — tools de MCP chegam por aqui)."
+   ToolGroups da plataforma, ex. [\"web\"] — tools de MCP chegam por aqui),
+   :tool-loop-inspectors / :tool-loop-transformers / :tool-call-inspectors
+   (mapas de fns — ver embabel-clj.interceptors), :guardrails (guardas de
+   entrada/saída — ver embabel-clj.guardrails; `:critical` ABORTA a chamada
+   com GuardRailViolationException)."
   ^String [ctx {:keys [llm image prompt max-tokens temperature timeout-s tools
-                       tool-groups] :as opts}]
+                       tool-groups tool-loop-inspectors tool-loop-transformers
+                       tool-call-inspectors guardrails prompt-contributors] :as opts}]
   (let [oc (->oc ctx)
         _  (when (nil? oc)
              (throw (ex-info "ask: ctx sem :oc — a action precisa de {:llm? true}"
                              {:ctx ctx})))
-        tune? (or max-tokens temperature timeout-s)
+        tune? (or max-tokens temperature timeout-s (:thinking opts))
         runner (cond-> (.ai oc)
                  tune?                    (.withLlm (llm-options opts))
                  (and llm (not tune?))    (.withLlm ^String llm)
                  image (.withImage image)
                  (seq tool-groups) (.withToolGroups
                                     ^java.util.Set (set (map name-str tool-groups)))
-                 (seq tools) (.withTools ^java.util.List (vec tools)))]
+                 (seq tools) (.withTools ^java.util.List (vec tools))
+                 ;; os três with* são VARARGS no Kotlin => um array no JVM
+                 (seq tool-loop-inspectors)
+                 (.withToolLoopInspectors
+                  (into-array ToolLoopInspector
+                              (map ic/->tool-loop-inspector tool-loop-inspectors)))
+                 (seq tool-loop-transformers)
+                 (.withToolLoopTransformers
+                  (into-array ToolLoopTransformer
+                              (map ic/->tool-loop-transformer tool-loop-transformers)))
+                 (seq tool-call-inspectors)
+                 (.withToolCallInspectors
+                  (into-array ToolCallInspector
+                              (map ic/->tool-call-inspector tool-call-inspectors)))
+                 (seq prompt-contributors)
+                 (.withPromptContributors
+                  ^java.util.List (mapv ->prompt-contributor prompt-contributors))
+                 (seq guardrails)
+                 (.withGuardRails
+                  (into-array GuardRail (map gr/->guardrail guardrails))))]
     (.generateText runner prompt)))
+
+(defn stream
+  "Texto do LLM em STREAMING: devolve um reactor.core.publisher.Flux<String>.
+
+   Achado que motiva esta fn: o `ask` monta o runner a partir de `(.ai oc)`, e
+   `OperationContextAi` NÃO é um `StreamingPromptRunner`. Quem é streaming é
+   `(.promptRunner oc)`, que devolve um `DelegatingStreamingPromptRunner` —
+   medido: promptRunner-streaming? true, ai-streaming? false. Ou seja: o
+   streaming nunca esteve ausente do framework nem exigia wrapper novo; a lib
+   é que estava no seam errado.
+
+   Opções: :prompt (obrigatório), :llm, :max-tokens, :temperature, :timeout-s,
+   :thinking, :prompt-contributors.
+
+     (->> (schema/stream ctx {:prompt \"conte uma história\"})
+          schema/stream-seq
+          (run! print))"
+  [ctx {:keys [llm prompt prompt-contributors] :as opts}]
+  (let [oc (->oc ctx)
+        ;; checa o TIPO, não só nil: `->oc` devolve o próprio ctx quando não há
+        ;; `:oc`, então um `(nil? oc)` deixava passar um mapa e a falha só
+        ;; aparecia como "No matching field found: promptRunner".
+        _  (when-not (instance? com.embabel.agent.api.common.OperationContext oc)
+             (throw (ex-info "stream: ctx sem :oc — a action precisa de {:llm? true}"
+                             {:ctx ctx :resolvido (type oc)})))
+        tune? (or (:max-tokens opts) (:temperature opts) (:timeout-s opts) (:thinking opts))
+        runner (cond-> (.promptRunner oc)
+                 tune?                 (.withLlm (llm-options opts))
+                 (and llm (not tune?)) (.withLlm ^String llm)
+                 (seq prompt-contributors)
+                 (.withPromptContributors
+                  ^java.util.List (mapv ->prompt-contributor prompt-contributors)))]
+    (when-not (instance? StreamingPromptRunner runner)
+      (throw (ex-info (str "stream: o runner deixou de ser StreamingPromptRunner após "
+                           "a configuração — reporte a combinação de opções")
+                      {:class (.getName (class runner)) :opts (keys opts)})))
+    ;; O `.streaming()` do framework lança UnsupportedOperationException quando
+    ;; o modelo por baixo não faz streaming (e manda checar `supportsStreaming`
+    ;; antes). Checar aqui troca um erro de runtime do Kotlin por um erro de
+    ;; dado com o nome do modelo.
+    (when-not (.supportsStreaming ^StreamingPromptRunner runner)
+      (throw (ex-info "stream: o modelo configurado não suporta streaming"
+                      {:llm llm :runner (.getName (class runner))})))
+    (-> ^StreamingPromptRunner runner
+        .streaming
+        (.withPrompt prompt)
+        .generateStream)))
+
+(defn stream-seq
+  "Flux -> seq preguiçosa e BLOQUEANTE de pedaços. Para não obrigar quem usa a
+   lib a importar Reactor só para consumir o stream."
+  [^reactor.core.publisher.Flux flux]
+  (iterator-seq (.iterator (.toIterable flux))))
 
 (defn create-edn!
   "Pede ao LLM um mapa EDN no formato do `:schema`, valida com malli e

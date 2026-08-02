@@ -2,9 +2,12 @@
   "Smoke de interop: constrói os objetos REAIS do Embabel 0.4.0 (sem subir
    Spring). Pega quebra de assinatura de ctor/interface na hora."
   (:require [clojure.test :refer [deftest is testing]]
+            [embabel-clj.blackboard :as bb]
             [embabel-clj.core :as ec])
-  (:import [com.embabel.agent.core Agent ProcessOptions]
-           [com.embabel.agent.api.common PlannerType]))
+  (:import [com.embabel.agent.core Agent AgentPlatform AgentProcess Blackboard
+            ProcessOptions]
+           [com.embabel.agent.api.common PlannerType]
+           [java.util.concurrent CompletableFuture CompletionException]))
 
 ;; --- vars taggeadas para o agent-from-ns -----------------------------------
 
@@ -72,6 +75,35 @@
     (is (thrown? clojure.lang.ExceptionInfo
                  (ec/process-options {:bugdet {:cost 1.0}})))))
 
+(deftest planner-hybrid-adaptativo
+  ;; HYBRID entrou no 0.5.0. A lib resolve o enum por Enum/valueOf em vez de
+  ;; PlannerType/HYBRID literal: como os .clj vão CRUS no jar (NO-AOT), um campo
+  ;; estático ausente derrubaria a carga da ns inteira sob :probe-040 — não só
+  ;; esta chamada. Por isso o teste é condicional à versão do classpath.
+  (let [tem-hybrid? (some? (try (Enum/valueOf PlannerType "HYBRID")
+                                (catch IllegalArgumentException _ nil)))]
+    (if tem-hybrid?
+      (testing "0.5.0+: :hybrid chega ao ProcessOptions"
+        (is (= "HYBRID"
+               (str (.getPlannerType (ec/process-options {:planner :hybrid}))))))
+      (testing "0.4.0: :hybrid falha com erro nomeando os planners disponíveis"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"não existe nesta versão"
+                              (ec/process-options {:planner :hybrid})))))
+    (testing "planner desconhecido é typo, pego pelo :closed do RunOptions"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (ec/process-options {:planner :goapp}))))))
+
+(deftest nirvana-e-o-par-do-hybrid
+  (let [n (ec/nirvana)]
+    (is (instance? com.embabel.agent.core.Goal n))
+    (testing "a pré-condição é inalcançável de propósito — NIRVANA nunca é satisfeito"
+      (is (= #{"__unobtanium__"} (set (.getPre n)))))
+    (testing "serve como goal de um agente, junto do goal terminal de verdade"
+      (let [ag (ec/agent {:name "hib" :description "utility + saída limpa"
+                          :goals   [n {:name "done" :pre [:ok?] :value 1.0}]
+                          :actions [{:name "work" :post [:ok?] :fn (fn [_] :ok)}]})]
+        (is (= 2 (count (.getGoals ag))))))))
+
 (deftest condicao-lazy-avalia
   (let [c (ec/condition {:name :sempre/sim? :fn (fn [_] true)})]
     (is (= "sempre/sim?" (.getName c)))
@@ -103,3 +135,87 @@
   (let [a (ec/action {:name "pesquisa" :tool-groups [:web]
                       :llm? true :fn (fn [_] :ok)})]
     (is (= ["web"] (mapv #(.getRole %) (.getToolGroups a))))))
+
+;; --- invoking (item 1.7) ----------------------------------------------------
+
+(deftest last-of-le-a-camada-tipada
+  ;; O lado de LEITURA da camada tipada: a action declara :outputs [Pedido], e
+  ;; no fim você pega o objeto pelo TIPO, sem saber o nome do slot.
+  (let [objs [(->Pedido 1) "um texto" (->Pedido 2)]
+        bbd  (reify Blackboard (getObjects [_] objs))]
+    (testing "devolve o ÚLTIMO daquele tipo"
+      (is (= (->Pedido 2) (bb/last-of bbd Pedido))))
+    (testing "funciona com qualquer Class, não só defrecord"
+      (is (= "um texto" (bb/last-of bbd String))))
+    (testing "tipo ausente = nil"
+      (is (nil? (bb/last-of bbd java.util.Date))))
+    (testing "last-result não precisa do tipo"
+      (is (= (->Pedido 2) (bb/last-result bbd))))))
+
+(deftest tool-call-context-no-run-options
+  (testing "contexto visível a toda tool do processo; keywords viram strings"
+    (let [m (.toMap (.getToolCallContext
+                     (ec/process-options {:tool-call-context {:tenant "acme"
+                                                              :corr/id "7"
+                                                              "raw" 1}})))]
+      (is (= "acme" (get m "tenant")))
+      (is (= "7" (get m "corr/id")) "keyword namespaced vira \"ns/nome\"")
+      (is (= 1 (get m "raw")))))
+  (testing "ausente = o contexto vazio do framework"
+    (is (true? (.isEmpty (.getToolCallContext (ec/process-options nil)))))))
+
+(defn- fake-platform
+  "AgentPlatform mínimo: só os dois métodos que run-async! usa."
+  [proc fut visto]
+  (reify AgentPlatform
+    (createAgentProcess [_ _ag opts bindings]
+      (reset! visto {:options opts :bindings (into {} bindings)})
+      proc)
+    (start [_ p] (swap! visto assoc :started p) fut)))
+
+(deftest run-async-cria-e-dispara
+  (let [proc  (reify AgentProcess (getId [_] "async-1"))
+        fut   (CompletableFuture/completedFuture proc)
+        visto (atom {})
+        ag    (ec/agent {:name "a" :description "d"
+                         :goals   [{:name "done" :pre [:ok?] :value 1.0}]
+                         :actions [{:name "w" :post [:ok?] :fn (fn [_] :ok)}]})
+        r     (ec/run-async! (fake-platform proc fut visto) ag
+                             {:bindings {:x 1 :co/y "z"}
+                              :options  {:budget {:cost 0.5}}})]
+    (testing "bindings viram chaves string, como no run! síncrono"
+      (is (= {"x" 1 "co/y" "z"} (:bindings @visto))))
+    (testing "as run options chegam como ProcessOptions de verdade"
+      (is (= 0.5 (-> @visto :options .getBudget .getCost))))
+    (testing "o processo criado é o que foi dado ao start"
+      (is (identical? proc (:started @visto))))
+    (testing "devolve o future do framework, e join! o resolve"
+      (is (instance? CompletableFuture r))
+      (is (identical? proc (ec/join! r)))
+      (is (identical? proc (ec/join! r {:timeout-s 5}))))))
+
+(deftest run-async-callbacks
+  (let [proc (reify AgentProcess (getId [_] "async-2"))]
+    (testing ":on-complete recebe o processo"
+      (let [chegou (atom nil)
+            fut    (CompletableFuture/completedFuture proc)]
+        (ec/join! (ec/run-async! (fake-platform proc fut (atom {}))
+                                 (ec/agent {:name "a" :description "d"
+                                            :goals [{:name "g" :pre [:ok?]}]
+                                            :actions [{:name "w" :post [:ok?]
+                                                       :fn (fn [_] :ok)}]})
+                                 {:on-complete #(reset! chegou (.getId %))}))
+        (is (= "async-2" @chegou))))
+
+    (testing ":on-error recebe o throwable"
+      (let [erro (atom nil)
+            fut  (doto (CompletableFuture.)
+                   (.completeExceptionally (RuntimeException. "explodiu")))
+            r    (ec/run-async! (fake-platform proc fut (atom {}))
+                                (ec/agent {:name "a" :description "d"
+                                           :goals [{:name "g" :pre [:ok?]}]
+                                           :actions [{:name "w" :post [:ok?]
+                                                      :fn (fn [_] :ok)}]})
+                                {:on-error #(reset! erro (.getMessage %))})]
+        (is (thrown? CompletionException (ec/join! r)))
+        (is (re-find #"explodiu" @erro))))))
